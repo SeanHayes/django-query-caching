@@ -16,53 +16,83 @@ TIMEOUT = 60
 #note, this isn't meant to be a current list of active keys, some will inevitably expire wihtout being removed from this list
 _table_key_map = {}
 
-def get_key(query):
+def get_key(compiler):
 	#generate keys that will be unique to each query
 	#NOTE: keys must be 250 characters or fewer
-	sql, params = query.get_compiler(using=DEFAULT_DB_ALIAS).as_nested_sql()
+	sql, params = compiler.as_nested_sql()
 	sql = sql.replace(' ','').replace('`','').replace('.','')
 	sql = sql % params
 	sql = sql.replace('%', '%25').replace(' ', '%20')
 	return sql
 
+#TODO: add cache invalidation using signals
+def invalidate(model):
+	#get table names for model and parents
+	parents = model._meta.parents.keys()
+	for table_name in table_names:
+		cache.delete_many(_table_key_map[table_name])
+
+#overwrite SQLCompiler.execute_sql
 def try_cache(self, result_type=None):
 	#logging.debug('try_cache()')
 	#logging.debug(self)
 	#logging.debug('Result type: %s' % result_type)
 	
-	key = get_key(self.query)
-	logging.debug('Key: %s' % key)
+	#SELECT, INSERT, UPDATE, DELETE are all 6 chars long
+	query_type = self.as_sql()[0][:6]
+	logging.debug('Query type: %s' % query_type)
 	
-	ret = cache.get(key)
-	if ret is None:
-		logging.debug('wasn\'t in cache')
+	if query_type == 'SELECT':
+		key = get_key(self)
+		logging.debug('Key: %s' % key)
+		
+		ret = cache.get(key)
+		if ret is None:
+			logging.debug('wasn\'t in cache')
+			if result_type is None:
+				ret = self._execute_sql()
+			else:
+				ret = self._execute_sql(result_type)
+			logging.debug('ret: %s' % ret)
+			if ret is not None:
+				ret = list(ret)
+				#logging.debug('Result: %s' % ret)
+				#logging.debug('Result class: %s' % ret.__class__)
+				cache.set(key, pickle.dumps(ret), timeout=TIMEOUT)
+		
+		#if not None, then unpickle the string
+		else:
+			logging.debug('was in cache')
+			ret = pickle.loads(ret)
+		
+		for table in self.query.tables:
+			try:
+				_table_key_map[table].add(key)
+			except KeyError:
+				_table_key_map[table] = set([key])
+		
+		return ret
+	#INSERT, UPDATE, DELETE statements
+	else:
+		#perform operation
 		if result_type is None:
 			ret = self._execute_sql()
 		else:
 			ret = self._execute_sql(result_type)
+		#TODO: invalidate cache only if rows were affected
 		
-		ret = list(ret)
-		#logging.debug('Result: %s' % ret)
-		#logging.debug('Result class: %s' % ret.__class__)
-		cache.set(key, pickle.dumps(ret), timeout=TIMEOUT)
+		keys_to_delete = set([])
+		for table in self.query.tables:
+			try:
+				keys_to_delete |= _table_key_map[table]
+			except KeyError:
+				pass
 		
-	#if not None, then unpickle the string
-	else:
-		logging.debug('was in cache')
-		ret = pickle.loads(ret)
-	
-	for table in self.query.tables:
-		try:
-			_table_key_map[table].add(key)
-		except KeyError:
-			_table_key_map[table] = set([key])
-	
-	return ret
+		cache.delete_many(keys_to_delete)
+		
+		return ret
 
 SQLCompiler._execute_sql = SQLCompiler.execute_sql
 SQLCompiler.execute_sql = try_cache
 
-#TODO: add cache invalidation using signals
-def invalidate(model):
-	#get table name for model
-	#cache.delete_many(_table_key_map[table_name])
+
