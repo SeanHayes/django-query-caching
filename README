@@ -1,0 +1,12 @@
+= Django Query Caching =
+Caches the results of SQL queries transparently.
+FYI, this isn't complete yet. There's probably a lot of bugs, and I haven't made sure this works OK with UPDATE, INSERT, or DELETE yet.
+
+= Usage =
+Place this directory in your Django project or on your Python path, then add 'django_query_caching' to your INSTALLED_APPS. That's it.
+
+= Why? =
+I'd written a CachedManager implementation that caches whole QuerySets, but it was really only good for doing things like MyModel.objects.all(). filter() and the other methods would still hit the database (writing custom filter() and exclude() methods to iterate over the whole cached QuerySet wouldn't be practical), as would anything to do with a RelatedManager. Using the Django Debug Toolbar, I also noticed that the same queries were sometimes being executed 2-3 times per page load, because they were occurring in seperate parts of my application and the built in QuerySet cache isn't shared across instances. I decided the simplest way to solve all these problems at once was to cache the results of the SQL statements themselves.
+
+= Contributing =
+Please do. You can fork this project in GitHub.
