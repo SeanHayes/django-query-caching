@@ -85,6 +85,7 @@ def try_cache(self, result_type=None):
 		for table in self.query.tables:
 			try:
 				keys_to_delete |= _table_key_map[table]
+				del _table_key_map[table]
 			except KeyError:
 				pass
 		

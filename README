@@ -10,3 +10,7 @@ I'd written a CachedManager implementation that caches whole QuerySets, but it w
 
 = Contributing =
 Please do. You can fork this project in GitHub.
+
+= License =
+This project is licensed under the BSD License.
+http://www.opensource.org/licenses/bsd-license.php
