@@ -2,19 +2,12 @@ from django.db.models.sql.compiler import SQLCompiler
 from django.db.models.sql.constants import MULTI
 from django.db import DEFAULT_DB_ALIAS
 from django.core.cache import cache
-import cPickle as pickle
 from django.db.models.signals import post_save, post_delete
 import logging
 
 TIMEOUT = 60
 
-#TODO: make sure only SELECT statements are cached, and others are left alone
-
-#FIXME: this will have to be stored in the cache in order to ensure all running instances of a Django project know when keys need to be invalidated
-#FIXME: How large can this get without hurting performance?
-#a dict with model names for keys and sets of cache keys using those models for values
-#note, this isn't meant to be a current list of active keys, some will inevitably expire wihtout being removed from this list
-_table_key_map = {}
+CACHE_PREFIX = 'django_query_caching:'
 
 def get_key(compiler):
 	#generate keys that will be unique to each query
@@ -25,12 +18,26 @@ def get_key(compiler):
 	sql = sql.replace('%', '%25').replace(' ', '%20')
 	return sql
 
-#TODO: add cache invalidation using signals
-def invalidate(model):
-	#get table names for model and parents
-	parents = model._meta.parents.keys()
-	for table_name in table_names:
-		cache.delete_many(_table_key_map[table_name])
+def get_table_keys(query):
+	table_keys = set([])
+	
+	for table in query.tables:
+		#logging.debug(table)
+		table_keys.add('%s%s' % (CACHE_PREFIX, table))
+	return table_keys
+
+def invalidate(query):
+	table_keys = get_table_keys(query)
+	
+	table_key_map = cache.get_many(table_keys)
+	
+	keys_to_delete = set(table_keys)
+	for table in table_key_map:
+		keys_to_delete |= table_key_map[table]
+	
+	logging.debug('Invalidating the following keys: %s' % str(keys_to_delete))
+	
+	success = cache.delete_many(keys_to_delete)
 
 #overwrite SQLCompiler.execute_sql
 def try_cache(self, result_type=None):
@@ -58,18 +65,22 @@ def try_cache(self, result_type=None):
 				ret = list(ret)
 				#logging.debug('Result: %s' % ret)
 				#logging.debug('Result class: %s' % ret.__class__)
-				cache.set(key, pickle.dumps(ret), timeout=TIMEOUT)
-		
-		#if not None, then unpickle the string
+				
+				#update key lists
+				table_keys = get_table_keys(self.query)
+				
+				table_key_map = cache.get_many(table_keys)
+				for table in table_keys:
+					if table in table_key_map:
+						table_key_map[table].add(key)
+					else:
+						table_key_map[table] = set([key])
+				
+				#update cache with new query result and table_key_map in a single atomic operation (where supported)
+				table_key_map[key] = ret
+				cache.set_many(table_key_map, timeout=TIMEOUT)
 		else:
 			logging.debug('was in cache')
-			ret = pickle.loads(ret)
-		
-		for table in self.query.tables:
-			try:
-				_table_key_map[table].add(key)
-			except KeyError:
-				_table_key_map[table] = set([key])
 		
 		return ret
 	#INSERT, UPDATE, DELETE statements
@@ -81,15 +92,7 @@ def try_cache(self, result_type=None):
 			ret = self._execute_sql(result_type)
 		#TODO: invalidate cache only if rows were affected
 		
-		keys_to_delete = set([])
-		for table in self.query.tables:
-			try:
-				keys_to_delete |= _table_key_map[table]
-				del _table_key_map[table]
-			except KeyError:
-				pass
-		
-		cache.delete_many(keys_to_delete)
+		invalidate(self.query)
 		
 		return ret
 
