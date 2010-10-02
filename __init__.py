@@ -3,11 +3,14 @@ from django.db.models.sql.constants import MULTI
 from django.db import DEFAULT_DB_ALIAS
 from django.core.cache import cache
 from django.db.models.signals import post_save, post_delete
+from django.conf import settings
 import logging
 
-TIMEOUT = 60
+TIMEOUT = settings.QUERY_CACHE_TIMEOUT if hasattr(settings, 'QUERY_CACHE_TIMEOUT') else 60
+logging.debug('TIMEOUT: %s' % TIMEOUT)
 
-CACHE_PREFIX = 'django_query_caching:'
+CACHE_PREFIX = settings.QUERY_CACHE_PREFIX if hasattr(settings, 'QUERY_CACHE_PREFIX') else 'django_query_caching:'
+logging.debug('CACHE_PREFIX: %s' % CACHE_PREFIX)
 
 def get_query_key(compiler):
 	"Generates keys that will be unique to each query."
@@ -55,6 +58,7 @@ def try_cache(self, result_type=None):
 	query_type = self.as_sql()[0][:6]
 	logging.debug('Query type: %s' % query_type)
 	
+	#SELECT statements
 	if query_type == 'SELECT':
 		key = get_query_key(self)
 		logging.debug('Key: %s' % key)
