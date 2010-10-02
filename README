@@ -1,6 +1,7 @@
 = Django Query Caching =
 Caches the results of SQL queries transparently.
 FYI, this isn't complete yet. There's probably a lot of bugs, and I haven't made sure this works OK with UPDATE, INSERT, or DELETE yet.
+This project was developed using Django 1.2.1.
 
 = Usage =
 Place this directory in your Django project or on your Python path, then add 'django_query_caching' to your INSTALLED_APPS. That's it.

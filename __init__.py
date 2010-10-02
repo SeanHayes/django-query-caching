@@ -18,7 +18,9 @@ def get_query_key(compiler):
 	#FIXME: should include database name
 	sql, params = compiler.as_nested_sql()
 	#whitespace in the query is removed, but whitespace in parameters is percent encoded
-	sql = sql.replace(' ','').replace('`','').replace('.','')[:6]
+	sql = sql.replace(' ','').replace('`','').replace('.','')[6:]
+	logging.debug(sql)
+	logging.debug(params)
 	sql = sql % params
 	#FIXME: if someone queries using a large amount of data (almost anything other than a number) this key will definitely be too long
 	sql = sql.replace('%', '%25').replace(' ', '%20')
@@ -48,7 +50,7 @@ def invalidate(query):
 	success = cache.delete_many(keys_to_delete)
 
 #overwrite SQLCompiler.execute_sql
-def try_cache(self, result_type=None):
+def try_cache(self, result_type=MULTI):
 	"This function overwrites the default behavior of SQLCompiler.execute_sql(), attempting to retreive data from the cache first before trying the database."
 	#logging.debug('try_cache()')
 	#logging.debug(self)
@@ -66,10 +68,7 @@ def try_cache(self, result_type=None):
 		ret = cache.get(key)
 		if ret is None:
 			logging.debug('wasn\'t in cache')
-			if result_type is None:
-				ret = self._execute_sql()
-			else:
-				ret = self._execute_sql(result_type)
+			ret = self._execute_sql(result_type)
 			logging.debug('ret: %s' % ret)
 			if ret is not None:
 				ret = list(ret)
@@ -96,10 +95,7 @@ def try_cache(self, result_type=None):
 	#INSERT, UPDATE, DELETE statements
 	else:
 		#perform operation
-		if result_type is None:
-			ret = self._execute_sql()
-		else:
-			ret = self._execute_sql(result_type)
+		ret = self._execute_sql(result_type)
 		#TODO: invalidate cache only if rows were affected
 		
 		invalidate(self.query)
