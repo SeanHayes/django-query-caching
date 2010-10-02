@@ -9,16 +9,20 @@ TIMEOUT = 60
 
 CACHE_PREFIX = 'django_query_caching:'
 
-def get_key(compiler):
-	#generate keys that will be unique to each query
+def get_query_key(compiler):
+	"Generates keys that will be unique to each query."
 	#NOTE: keys must be 250 characters or fewer
+	#FIXME: should include database name
 	sql, params = compiler.as_nested_sql()
-	sql = sql.replace(' ','').replace('`','').replace('.','')
+	#whitespace in the query is removed, but whitespace in parameters is percent encoded
+	sql = sql.replace(' ','').replace('`','').replace('.','')[:6]
 	sql = sql % params
+	#FIXME: if someone queries using a large amount of data (almost anything other than a number) this key will definitely be too long
 	sql = sql.replace('%', '%25').replace(' ', '%20')
 	return sql
 
 def get_table_keys(query):
+	"Returns a set of cache keys based on table names. These keys are used to store sets of keys for cached queries that depend on said tables."
 	table_keys = set([])
 	
 	for table in query.tables:
@@ -27,6 +31,7 @@ def get_table_keys(query):
 	return table_keys
 
 def invalidate(query):
+	"Invalidates the cache keys relevant to the supplied query."
 	table_keys = get_table_keys(query)
 	
 	table_key_map = cache.get_many(table_keys)
@@ -41,16 +46,17 @@ def invalidate(query):
 
 #overwrite SQLCompiler.execute_sql
 def try_cache(self, result_type=None):
+	"This function overwrites the default behavior of SQLCompiler.execute_sql(), attempting to retreive data from the cache first before trying the database."
 	#logging.debug('try_cache()')
 	#logging.debug(self)
 	#logging.debug('Result type: %s' % result_type)
 	
-	#SELECT, INSERT, UPDATE, DELETE are all 6 chars long
+	#luckily SELECT, INSERT, UPDATE, DELETE are all 6 chars long
 	query_type = self.as_sql()[0][:6]
 	logging.debug('Query type: %s' % query_type)
 	
 	if query_type == 'SELECT':
-		key = get_key(self)
+		key = get_query_key(self)
 		logging.debug('Key: %s' % key)
 		
 		ret = cache.get(key)
