@@ -6,12 +6,18 @@ from django.db.models.signals import post_save, post_delete
 from django.conf import settings
 import logging
 
-#TODO: add exclude list so you can specify if certain tables shouldn't be cached
+#TODO: add exclude list so you can specify if queries involving certain tables shouldn't be cached
+#TODO: add another exclude list that's only for the main table being queried (e.g. for if you don't want User objects cached, but are fine with caching objects that are queried using User)
+#TODO: add size limit (only results shorter than this will be cached)
 
-TIMEOUT = settings.QUERY_CACHE_TIMEOUT if hasattr(settings, 'QUERY_CACHE_TIMEOUT') else 60
+#FIXME: need to ensure list of table keys don't expire before the keys themselves, or handle this occurance. Can either touch table keys frequently, or invalidate whole cache if they're missing (which would require frequent checking).
+
+#use a high default value since memcached uses LRU, so least needed items will get thrown out automatically when cache fills up.
+TIMEOUT = settings.QUERY_CACHE_TIMEOUT if hasattr(settings, 'QUERY_CACHE_TIMEOUT') else 86400
 logging.debug('TIMEOUT: %s' % TIMEOUT)
 
-CACHE_PREFIX = settings.QUERY_CACHE_PREFIX if hasattr(settings, 'QUERY_CACHE_PREFIX') else 'django_query_caching:'
+#use shorter keys for performance. They just have to be unique, probably no one will ever see them.
+CACHE_PREFIX = settings.QUERY_CACHE_PREFIX if hasattr(settings, 'QUERY_CACHE_PREFIX') else 'dqc:'
 logging.debug('CACHE_PREFIX: %s' % CACHE_PREFIX)
 
 def get_query_key(compiler):
@@ -24,8 +30,9 @@ def get_query_key(compiler):
 	logging.debug(sql)
 	logging.debug(params)
 	sql = sql % params
-	#FIXME: if someone queries using a large amount of data (almost anything other than a number) this key will definitely be too long
+	#FIXME: if someone queries using a large amount of data (almost anything other than a number key) this key will definitely be too long
 	#TODO: maybe use a hash function?
+	#sha-256 should work (no collisions, only 32 bytes long). The binary value should be base64 encoded instead of hex encoded to reduce key size.
 	sql = sql.replace('%', '%25').replace(' ', '%20')
 	return sql
 
