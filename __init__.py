@@ -6,6 +6,8 @@ from django.db.models.signals import post_save, post_delete
 from django.conf import settings
 import logging
 
+#TODO: add exclude list so you can specify if certain tables shouldn't be cached
+
 TIMEOUT = settings.QUERY_CACHE_TIMEOUT if hasattr(settings, 'QUERY_CACHE_TIMEOUT') else 60
 logging.debug('TIMEOUT: %s' % TIMEOUT)
 
@@ -23,6 +25,7 @@ def get_query_key(compiler):
 	logging.debug(params)
 	sql = sql % params
 	#FIXME: if someone queries using a large amount of data (almost anything other than a number) this key will definitely be too long
+	#TODO: maybe use a hash function?
 	sql = sql.replace('%', '%25').replace(' ', '%20')
 	return sql
 
@@ -105,4 +108,5 @@ def try_cache(self, result_type=MULTI):
 SQLCompiler._execute_sql = SQLCompiler.execute_sql
 SQLCompiler.execute_sql = try_cache
 
+#TODO: add patch and unpatch methods
 
