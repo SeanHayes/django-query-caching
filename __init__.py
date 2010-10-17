@@ -7,6 +7,7 @@ from django.conf import settings
 import logging
 import pdb
 import sys
+from datetime import datetime
 
 SELECT_QUERY = 0
 INSERT_QUERY = 1
@@ -34,10 +35,6 @@ logging.debug('EXCLUDE_MODELS: %s' % EXCLUDE_MODELS)
 SIZE_LIMIT = settings.QUERY_CACHE_SIZE_LIMIT if hasattr(settings, 'QUERY_CACHE_SIZE_LIMIT') else 1048576
 logging.debug('SIZE_LIMIT: %s' % SIZE_LIMIT)
 
-#option to touch table keys frequently (to reduce chances of being LRUed). Would be a more attractive option if add_many were available (which is why this is off by default).
-TOUCH_TABLE_KEYS = settings.QUERY_CACHE_TOUCH_TABLE_KEYS if hasattr(settings, 'QUERY_CACHE_TOUCH_TABLE_KEYS') else False
-logging.debug('TOUCH_TABLE_KEYS: %s' % TOUCH_TABLE_KEYS)
-
 #use a high default value since memcached uses LRU, so least needed items will get thrown out automatically when cache fills up.
 TIMEOUT = settings.QUERY_CACHE_TIMEOUT if hasattr(settings, 'QUERY_CACHE_TIMEOUT') else 86400
 logging.debug('TIMEOUT: %s' % TIMEOUT)
@@ -63,7 +60,7 @@ def get_query_key(compiler):
 	return sql
 
 def get_table_keys(query):
-	"Returns a set of cache keys based on table names. These keys are used to store sets of keys for cached queries that depend on said tables."
+	"Returns a set of cache keys based on table names. These keys are used to store timestamps of when the last time said tables were last updated."
 	table_keys = set([])
 	
 	for table in query.tables:
@@ -88,6 +85,11 @@ def invalidate(query):
 	else:
 		logging.debug('Some table keys were missing, invalidating whole cache.')
 		cache.clear()
+
+def get_current_timestamp():
+	#TODO: make timezone aware
+	#this has microsecond precision, which is good
+	return datetime.now()
 
 #FIXME: before doing INSERT, UPDATE, or DELETE, Django first does a SELECT to see if the rows exists, which means the cache will needlessly be updated right before the updated parts are invalidated. Any way around this? Maybe these SELECT queries have some sort of flag we can use to ignore them.
 def try_cache(self, result_type=MULTI):
@@ -115,50 +117,61 @@ def try_cache(self, result_type=MULTI):
 		key = get_query_key(self)
 		logging.debug('Key: %s' % key)
 		
-		ret = cache.get(key)
+		ret = None
+		#get table timeouts and compare to query timeout
+		keys_to_get = get_table_keys(self.query).append(key)
+		cached_vals = cache.get_many(keys_to_get)
+		
+		#check if all keys were returned
+		if len(keys_to_get) == len(cached_vals):
+			#remove query result from cached_vals, leaving only the table timeouts
+			ret = cached_vals.pop(key, None)
+			#only do this if query result was present
+			if ret is not None:
+				for k in cached_vals:
+					#if the table was updated since the query result was stored, then it's invalid
+					if cached_vals[k] > ret[0]:
+						ret = None
+						break
+		else:
+			#TODO: if any table timeouts are missing, replace them
+		
 		if ret is None:
 			logging.debug('wasn\'t in cache')
 			ret = self._execute_sql(result_type)
 			logging.debug('ret: %s' % ret)
 			
-			pdb.set_trace()
+			#pdb.set_trace()
 			if ret is not None:# and sys.getsizeof(ret) < SIZE_LIMIT:
+				now = get_current_timestamp()
 				ret = list(ret)
 				#logging.debug('Result: %s' % ret)
 				#logging.debug('Result class: %s' % ret.__class__)
 				
-				#update key lists
-				table_keys = get_table_keys(self.query)
-				
-				table_key_map = cache.get_many(table_keys)
-				for table in table_keys:
-					if table in table_key_map:
-						table_key_map[table].add(key)
-					else:
-						table_key_map[table] = set([key])
-				
-				#update cache with new query result and table_key_map in a single atomic operation (where supported)
-				table_key_map[key] = ret
-				cache.set_many(table_key_map, timeout=TIMEOUT)
+				#update cache with new query result
+				cache.set(key, (now, ret), timeout=TIMEOUT)
+			#else the value is still good but just shouldn't be stored, so we delete the key.
+			#this won't always result in a deleted key, since sometimes the key won't be there to begin with,
+			#but other times an outdated key could be stored in the cache with no storable value to replace it with, and deleting it here can save some bandwidth and processing when attempting to get the invalid key later on.
+			else:
+				cache.delete(key)
 		else:
 			logging.debug('was in cache')
-			if TOUCH_TABLE_KEYS:
-				for key in get_table_keys(self.query):
-					#adding an existing key won't change the value, but in memcached it will move it to the from of the LRU
-					success = cache.add(key, '')
-					#if it added a value, that means the key was pushed out, which means we have to invalidate the whole cache now (it won't happen in invalidate() since won't notice the missing key now).
-					if success:
-						cache.clear()
-						break
+			#if the query result was obtained from the cache, then it's actually a tuple of the form (timeout, query_result)
+			ret = ret[1]
 		
 		return ret
 	#INSERT, UPDATE, DELETE statements (and SELECT with caching disabled)
 	else:
 		#perform operation
 		ret = self._execute_sql(result_type)
-		#invalidate cache only if rows were affected (don't do this for SELECT statements)
+		#update table timeouts in cache only if rows were affected (don't do this for SELECT statements)
 		if query_type != SELECT_QUERY and ret.cursor.rowcount > 0:
-			invalidate(self.query)
+			now = get_current_timestamp()
+			#update key lists
+			#TODO: only do this for tables not in EXCLUDE_TABLES and EXCLUDE_MODELS
+			table_key_map = dict((key, now) for key in get_table_keys(self.query))
+			cache.set_many(table_key_map, timeout=TIMEOUT)
 		
 		return ret
 
