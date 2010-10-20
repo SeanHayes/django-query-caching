@@ -4,10 +4,14 @@ from django.db import DEFAULT_DB_ALIAS
 from django.core.cache import cache
 from django.db.models.signals import post_save, post_delete
 from django.conf import settings
+import defaults
 import logging
 import pdb
 import sys
 from datetime import datetime
+import hashlib
+import base64
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -27,41 +31,38 @@ QUERY_TYPES = {
 
 #TODO: need to support strings in settings and convert them to Model classes
 #exclude list (actually a set) so you can specify if queries involving certain tables shouldn't be cached
-EXCLUDE_TABLES = settings.QUERY_CACHE_EXCLUDE_TABLES if hasattr(settings, 'QUERY_CACHE_EXCLUDE_TABLES') else set()
+EXCLUDE_TABLES = settings.QUERY_CACHE_EXCLUDE_TABLES if hasattr(settings, 'QUERY_CACHE_EXCLUDE_TABLES') else defaults.EXCLUDE_TABLES
 logger.debug('EXCLUDE_TABLES: %s' % EXCLUDE_TABLES)
 
 #another exclude list that's only for the main table being queried (e.g. for if you don't want User objects cached, but are fine with caching objects that are queried using User)
-EXCLUDE_MODELS = settings.QUERY_CACHE_EXCLUDE_MODELS if hasattr(settings, 'QUERY_CACHE_EXCLUDE_MODELS') else set()
+EXCLUDE_MODELS = settings.QUERY_CACHE_EXCLUDE_MODELS if hasattr(settings, 'QUERY_CACHE_EXCLUDE_MODELS') else defaults.EXCLUDE_MODELS
 logger.debug('EXCLUDE_MODELS: %s' % EXCLUDE_MODELS)
 
 #size limit in bytes (only results shorter than this will be cached). Defaults to 1 MB for now.
 #TODO: need to find a way to implement this (sys.getsizeof isn't working well)
-SIZE_LIMIT = settings.QUERY_CACHE_SIZE_LIMIT if hasattr(settings, 'QUERY_CACHE_SIZE_LIMIT') else 1048576
+SIZE_LIMIT = settings.QUERY_CACHE_SIZE_LIMIT if hasattr(settings, 'QUERY_CACHE_SIZE_LIMIT') else defaults.SIZE_LIMIT
 logger.debug('SIZE_LIMIT: %s' % SIZE_LIMIT)
 
 #use a high default value since memcached uses LRU, so least needed items will get thrown out automatically when cache fills up.
-TIMEOUT = settings.QUERY_CACHE_TIMEOUT if hasattr(settings, 'QUERY_CACHE_TIMEOUT') else 86400
+TIMEOUT = settings.QUERY_CACHE_TIMEOUT if hasattr(settings, 'QUERY_CACHE_TIMEOUT') else defaults.TIMEOUT
 logger.debug('TIMEOUT: %s' % TIMEOUT)
 
 #use shorter keys for performance. They just have to be unique, probably no one will ever see them.
-CACHE_PREFIX = settings.QUERY_CACHE_PREFIX if hasattr(settings, 'QUERY_CACHE_PREFIX') else 'dqc:'
+CACHE_PREFIX = settings.QUERY_CACHE_PREFIX if hasattr(settings, 'QUERY_CACHE_PREFIX') else defaults.CACHE_PREFIX
 logger.debug('CACHE_PREFIX: %s' % CACHE_PREFIX)
 
 def get_query_key(compiler):
 	"Generates keys that will be unique to each query."
 	#NOTE: keys must be 250 characters or fewer
-	#FIXME: should include database name
 	sql, params = compiler.as_nested_sql()
-	#whitespace in the query is removed, but whitespace in parameters is percent encoded
-	sql = sql.replace(' ','').replace('`','').replace('.','')[6:]
-	#logger.debug(sql)
+	#profiling shows that using string.replace and regex to shorten sql (removing [ `.]) adds more
+	#time than is saved during sha256-ing. [6:] has some slight benefit though.
+	key = '%s:%s' % (compiler.using, sql[6:])
+	#logger.debug(key)
 	#logger.debug(params)
-	sql = sql % params
-	#FIXME: if someone queries using a large amount of data (almost anything other than a number key) this key will definitely be too long
-	#TODO: maybe use a hash function?
+	key = key % params
 	#sha-256 should work (no collisions, only 32 bytes long). The binary value should be base64 encoded instead of hex encoded to reduce key size.
-	sql = sql.replace('%', '%25').replace(' ', '%20')
-	return sql
+	return base64.b64encode(hashlib.sha256(key).digest())
 
 def get_table_keys(query):
 	"Returns a set of cache keys based on table names. These keys are used to store timestamps of when the last time said tables were last updated."
@@ -101,59 +102,65 @@ def try_cache(self, result_type=MULTI):
 	#SELECT statements
 	if query_type == SELECT_QUERY and enabled:
 		query_key = get_query_key(self)
-		#logger.debug('Key: %s' % query_key)
+		logger.debug('Key: %s' % query_key)
 		
-		ret = None
-		#get table timeouts and compare to query timeout
+		#get table timestamps and compare to query timestamp
 		keys_to_get = get_table_keys(self.query)
 		keys_to_get.add(query_key)
 		#logger.debug('keys_to_get: %s' % str(keys_to_get))
 		cached_vals = cache.get_many(keys_to_get)
+		#remove query result from cached_vals, leaving only the table timestamps
+		ret = cached_vals.pop(query_key, None)
 		
 		#check if all keys were returned
-		if len(keys_to_get) == len(cached_vals):
-			#remove query result from cached_vals, leaving only the table timeouts
-			ret = cached_vals.pop(query_key, None)
+		if len(keys_to_get)-1 == len(cached_vals):
 			#only do this if query result was present
 			if ret is not None:
 				for k in cached_vals:
 					#if the table was updated since the query result was stored, then it's invalid
 					if cached_vals[k] > ret[0]:
 						ret = None
+						logger.debug('key is outdated')
 						break
-		#if the query key is present then a timeout is missing
-		elif query_key in cached_vals:
-			#if any table timeouts are missing, replace them
+		else:
+			#if any table timestamps are missing, replace them
+			logger.debug('timestamps missing')
 			keys_to_add = {}
 			now = get_current_timestamp()
 			for k in keys_to_get:
 				if k not in cached_vals:
 					keys_to_add[k] = now
-			if len(keys_to_add) > 0:
-				cache.set_many(keys_to_add, timeout=TIMEOUT)
+			cache.set_many(keys_to_add, timeout=TIMEOUT)
+			#we can't guarantee the result is current
+			ret = None
 		
 		if ret is None:
-			#logger.debug('wasn\'t in cache')
+			logger.debug('wasn\'t in cache')
 			ret = self._execute_sql(result_type)
 			#logger.debug('ret: %s' % ret)
 			
 			#pdb.set_trace()
+			#if ret isn't None store the value
 			if ret is not None:# and sys.getsizeof(ret) < SIZE_LIMIT:
 				now = get_current_timestamp()
 				ret = list(ret)
-				#logger.debug('Result: %s' % ret)
+				logger.debug('Result: %s' % ret)
 				#logger.debug('Result class: %s' % ret.__class__)
 				
 				#update cache with new query result
 				cache.set(query_key, (now, ret), timeout=TIMEOUT)
-			#else the value is still good but just shouldn't be stored, so we delete the key.
-			#this won't always result in a deleted key, since sometimes the key won't be there to begin with,
-			#but other times an outdated key could be stored in the cache with no storable value to replace it with, and deleting it here can save some bandwidth and processing when attempting to get the invalid key later on.
+			#else the value is still valid but just shouldn't be stored, so we delete
+			#the key (None shouldn't be stored, but can be returned by execute_sql).
+			#this won't always result in a deleted key, since sometimes the key
+			#won't be there to begin with, but other times an outdated key could
+			#be stored in the cache with no storable value to replace it with, and
+			#deleting it here can save some bandwidth and processing when attempting
+			#to get the invalid key later on.
 			else:
 				cache.delete(query_key)
 		else:
-			#logger.debug('was in cache')
-			#if the query result was obtained from the cache, then it's actually a tuple of the form (timeout, query_result)
+			logger.debug('was in cache')
+			#if the query result was obtained from the cache, then it's actually a tuple of the form (timestamp, query_result)
 			ret = ret[1]
 		
 		return ret
@@ -161,7 +168,7 @@ def try_cache(self, result_type=MULTI):
 	else:
 		#perform operation
 		ret = self._execute_sql(result_type)
-		#update table timeouts in cache only if rows were affected (don't do this for SELECT statements)
+		#update table timestamps in cache only if rows were affected (don't do this for SELECT statements)
 		if query_type != SELECT_QUERY and ret.cursor.rowcount > 0:
 			now = get_current_timestamp()
 			#update key lists
