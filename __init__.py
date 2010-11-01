@@ -66,10 +66,13 @@ def get_query_key(compiler):
 
 def get_table_keys(query):
 	"Returns a set of cache keys based on table names. These keys are used to store timestamps of when the last time said tables were last updated."
+	logger.debug('get_table_keys()')
 	table_keys = set([])
-	
-	for table in query.tables:
-		#logger.debug(table)
+	tables = query.tables
+	if len(tables) == 0:
+		tables = [query.model._meta.db_table]
+	for table in tables:
+		logger.debug('table: %s' % table)
 		table_keys.add('%s%s' % (CACHE_PREFIX, table))
 	return table_keys
 
@@ -84,6 +87,8 @@ def try_cache(self, result_type=MULTI):
 	#logger.debug('try_cache()')
 	#logger.debug(self)
 	#logger.debug('Result type: %s' % result_type)
+	logger.debug(self.as_sql())
+	#pdb.set_trace()
 	
 	#luckily SELECT, INSERT, UPDATE, DELETE are all 6 chars long
 	query_type = QUERY_TYPES[self.as_sql()[0][:6]]
@@ -96,7 +101,7 @@ def try_cache(self, result_type=MULTI):
 		enabled = False
 	
 	#if some tables are excluded and some of those are in this query, don't cache
-	if enabled and len(EXCLUDE_TABLES) > 0 and len(EXCLUDE_TABLES & set(query.tables)) > 0:
+	if enabled and len(EXCLUDE_TABLES) > 0 and len(EXCLUDE_TABLES & set(self.query.tables)) > 0:
 		enabled = False
 	
 	#SELECT statements
@@ -111,13 +116,19 @@ def try_cache(self, result_type=MULTI):
 		cached_vals = cache.get_many(keys_to_get)
 		#remove query result from cached_vals, leaving only the table timestamps
 		ret = cached_vals.pop(query_key, None)
+		if ret is not None:
+			logger.debug('wasn\'t in cache')
+		else:
+			logger.debug('was in cache')
 		
 		#check if all keys were returned
 		if len(keys_to_get)-1 == len(cached_vals):
 			#only do this if query result was present
 			if ret is not None:
+				logger.debug('query timeout: %s' % ret[0])
 				for k in cached_vals:
 					#if the table was updated since the query result was stored, then it's invalid
+					logger.debug('timeout: %s = %s' % (k, cached_vals[k]))
 					if cached_vals[k] > ret[0]:
 						ret = None
 						logger.debug('key is outdated')
@@ -135,7 +146,7 @@ def try_cache(self, result_type=MULTI):
 			ret = None
 		
 		if ret is None:
-			logger.debug('wasn\'t in cache')
+			logger.debug('no valid ret value in cache')
 			ret = self._execute_sql(result_type)
 			#logger.debug('ret: %s' % ret)
 			
@@ -159,7 +170,7 @@ def try_cache(self, result_type=MULTI):
 			else:
 				cache.delete(query_key)
 		else:
-			logger.debug('was in cache')
+			logger.debug('valid ret value was in cache')
 			#if the query result was obtained from the cache, then it's actually a tuple of the form (timestamp, query_result)
 			ret = ret[1]
 		
@@ -174,7 +185,9 @@ def try_cache(self, result_type=MULTI):
 			#update key lists
 			#TODO: only do this for tables not in EXCLUDE_TABLES and EXCLUDE_MODELS
 			table_key_map = dict((key, now) for key in get_table_keys(self.query))
+			logger.debug(table_key_map)
 			cache.set_many(table_key_map, timeout=TIMEOUT)
+			#pdb.set_trace()
 		
 		return ret
 
