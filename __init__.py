@@ -32,10 +32,12 @@ QUERY_TYPES = {
 #TODO: need to support strings in settings and convert them to Model classes
 #exclude list (actually a set) so you can specify if queries involving certain tables shouldn't be cached
 EXCLUDE_TABLES = settings.QUERY_CACHE_EXCLUDE_TABLES if hasattr(settings, 'QUERY_CACHE_EXCLUDE_TABLES') else defaults.EXCLUDE_TABLES
+EXCLUDE_TABLES = frozenset(EXCLUDE_TABLES)
 logger.debug('EXCLUDE_TABLES: %s' % EXCLUDE_TABLES)
 
 #another exclude list that's only for the main table being queried (e.g. for if you don't want User objects cached, but are fine with caching objects that are queried using User)
 EXCLUDE_MODELS = settings.QUERY_CACHE_EXCLUDE_MODELS if hasattr(settings, 'QUERY_CACHE_EXCLUDE_MODELS') else defaults.EXCLUDE_MODELS
+EXCLUDE_MODELS = frozenset(EXCLUDE_MODELS)
 logger.debug('EXCLUDE_MODELS: %s' % EXCLUDE_MODELS)
 
 #size limit in bytes (only results shorter than this will be cached). Defaults to 1 MB for now.
@@ -69,8 +71,11 @@ def get_table_keys(query):
 	logger.debug('get_table_keys()')
 	table_keys = set([])
 	tables = query.tables
+	#OPTIMIZE: if not tables:
 	if len(tables) == 0:
 		tables = [query.model._meta.db_table]
+	#will converting to frozensets be faster?
+	#test if map is faster. if not, list comprehensions are
 	for table in tables:
 		logger.debug('table: %s' % table)
 		table_keys.add('%s%s' % (CACHE_PREFIX, table))
