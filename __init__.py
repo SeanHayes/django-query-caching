@@ -29,6 +29,8 @@ QUERY_TYPES = {
 	'DELETE': DELETE_QUERY,
 }
 
+#TODO: how to handle transactions?
+
 #TODO: need to support strings in settings and convert them to Model classes
 #exclude list (actually a set) so you can specify if queries involving certain tables shouldn't be cached
 EXCLUDE_TABLES = settings.QUERY_CACHE_EXCLUDE_TABLES if hasattr(settings, 'QUERY_CACHE_EXCLUDE_TABLES') else defaults.EXCLUDE_TABLES
@@ -64,6 +66,7 @@ def get_query_key(compiler):
 	#logger.debug(params)
 	key = key % params
 	#sha-256 should work (no collisions, only 32 bytes long). The binary value should be base64 encoded instead of hex encoded to reduce key size.
+	#TODO: check if these are implemented with C extensions
 	return base64.b64encode(hashlib.sha256(key).digest())
 
 def get_table_keys(query):
@@ -201,6 +204,7 @@ if not patched:
 	patched = True
 	SQLCompiler._execute_sql = SQLCompiler.execute_sql
 	SQLCompiler.execute_sql = try_cache
+	#TODO: set timeout keys for all models on initialization. This will make sure cache is invalidated when reloading web server (so sys admins won't have to invalidate all of memcached when upgrading live code)
 
 #TODO: add patch and unpatch methods
 
