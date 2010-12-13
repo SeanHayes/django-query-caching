@@ -13,7 +13,7 @@ setup(name='django-query-caching',
 	keywords='django query cache',
 	url='https://github.com/SeanHayes/django-query-caching',
 	license='BSD',
-	packages=['django_config_gen'],
+	packages=['django_query_caching'],
 	install_requires=['django',],
 )
 
