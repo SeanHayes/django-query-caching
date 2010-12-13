@@ -17,4 +17,3 @@ setup(name='django-query-caching',
 	install_requires=['django',],
 )
 
-
