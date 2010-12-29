@@ -2,11 +2,10 @@
 # -*- coding: utf-8 -*-
 
 from setuptools import setup
-
-version = '0.1.0'
+#import django_query_caching
 
 setup(name='django-query-caching',
-	version=version,
+	version='0.1.1',
 	description="Caches the results of SQL queries transparently.",
 	author='Seán Hayes',
 	author_email='sean@seanhayes.name',
