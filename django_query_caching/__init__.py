@@ -15,7 +15,7 @@ import re
 
 logger = logging.getLogger(__name__)
 
-VERSION = (0, 1, 1)
+VERSION = (0, 1, 2)
 
 __version__ = "".join([".".join(map(str, VERSION[0:3])), "".join(VERSION[3:])])
 
@@ -34,6 +34,7 @@ QUERY_TYPES = {
 }
 
 #TODO: how to handle transactions?
+#TODO: ignore randomly sorted queries
 
 #TODO: need to support strings in settings and convert them to Model classes
 #exclude list (actually a set) so you can specify if queries involving certain tables shouldn't be cached
@@ -59,6 +60,7 @@ logger.debug('TIMEOUT: %s' % TIMEOUT)
 CACHE_PREFIX = settings.QUERY_CACHE_PREFIX if hasattr(settings, 'QUERY_CACHE_PREFIX') else defaults.CACHE_PREFIX
 logger.debug('CACHE_PREFIX: %s' % CACHE_PREFIX)
 
+#TODO: double check to make sure "ORDER BY" is included
 def get_query_key(compiler):
 	"Generates keys that will be unique to each query."
 	#NOTE: keys must be 250 characters or fewer
@@ -191,8 +193,21 @@ def try_cache(self, result_type=MULTI):
 	else:
 		#perform operation
 		ret = self._execute_sql(result_type)
+		
+		#get number of affected rows
+		#in case some unknown db is used and neither attribute is available, we'll err on the side of caution and assume something changed hence the default of (1)
+		rowcount = 1
+		try:
+			#ret.cursor.rowcount used in MySQL and PostgreSQL
+			rowcount = ret.cursor.rowcount
+		except:
+			try:
+				#ret.rowcount used in SQLite
+				rowcount = ret.rowcount
+			except:
+				pass
 		#update table timestamps in cache only if rows were affected (don't do this for SELECT statements)
-		if query_type != SELECT_QUERY and ret.cursor.rowcount > 0:
+		if query_type != SELECT_QUERY and rowcount > 0:
 			now = get_current_timestamp()
 			#update key lists
 			#TODO: only do this for tables not in EXCLUDE_TABLES and EXCLUDE_MODELS
