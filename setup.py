@@ -26,6 +26,6 @@ setup(name='django-query-caching',
 	url='https://github.com/SeanHayes/django-query-caching',
 	license='BSD',
 	packages=['django_query_caching'],
-	install_requires=['django',],
+	install_requires=['Django',],
 )
 
