@@ -1,5 +1,6 @@
 from django.db.models.sql.compiler import SQLCompiler
 from django.db.models.sql.constants import MULTI
+from django.db.models.sql.datastructures import EmptyResultSet
 from django.db import DEFAULT_DB_ALIAS
 from django.core.cache import cache
 from django.db.models.signals import post_save, post_delete
@@ -21,43 +22,46 @@ __version__ = "".join([".".join(map(str, VERSION[0:3])), "".join(VERSION[3:])])
 
 patched = False
 
+UNKNOWN_QUERY = -1
 SELECT_QUERY = 0
 INSERT_QUERY = 1
 UPDATE_QUERY = 2
 DELETE_QUERY = 3
 
 QUERY_TYPES = {
+	'': UNKNOWN_QUERY,
 	'SELECT': SELECT_QUERY,
 	'INSERT': INSERT_QUERY,
 	'UPDATE': UPDATE_QUERY,
 	'DELETE': DELETE_QUERY,
 }
 
+#TODO: add context manager for temporarily disabling caching
 #TODO: how to handle transactions?
 #TODO: ignore randomly sorted queries
 
 #TODO: need to support strings in settings and convert them to Model classes
 #exclude list (actually a set) so you can specify if queries involving certain tables shouldn't be cached
-EXCLUDE_TABLES = settings.QUERY_CACHE_EXCLUDE_TABLES if hasattr(settings, 'QUERY_CACHE_EXCLUDE_TABLES') else defaults.EXCLUDE_TABLES
+EXCLUDE_TABLES = getattr(settings, 'QUERY_CACHE_EXCLUDE_TABLES', defaults.EXCLUDE_TABLES)
 EXCLUDE_TABLES = frozenset(EXCLUDE_TABLES)
 logger.debug('EXCLUDE_TABLES: %s' % EXCLUDE_TABLES)
 
 #another exclude list that's only for the main table being queried (e.g. for if you don't want User objects cached, but are fine with caching objects that are queried using User)
-EXCLUDE_MODELS = settings.QUERY_CACHE_EXCLUDE_MODELS if hasattr(settings, 'QUERY_CACHE_EXCLUDE_MODELS') else defaults.EXCLUDE_MODELS
+EXCLUDE_MODELS = getattr(settings, 'QUERY_CACHE_EXCLUDE_MODELS', defaults.EXCLUDE_MODELS)
 EXCLUDE_MODELS = frozenset(EXCLUDE_MODELS)
 logger.debug('EXCLUDE_MODELS: %s' % EXCLUDE_MODELS)
 
 #size limit in bytes (only results shorter than this will be cached). Defaults to 1 MB for now.
 #TODO: need to find a way to implement this (sys.getsizeof isn't working well)
-SIZE_LIMIT = settings.QUERY_CACHE_SIZE_LIMIT if hasattr(settings, 'QUERY_CACHE_SIZE_LIMIT') else defaults.SIZE_LIMIT
+SIZE_LIMIT = getattr(settings, 'QUERY_CACHE_SIZE_LIMIT', defaults.SIZE_LIMIT)
 logger.debug('SIZE_LIMIT: %s' % SIZE_LIMIT)
 
 #use a high default value since memcached uses LRU, so least needed items will get thrown out automatically when cache fills up.
-TIMEOUT = settings.QUERY_CACHE_TIMEOUT if hasattr(settings, 'QUERY_CACHE_TIMEOUT') else defaults.TIMEOUT
+TIMEOUT = getattr(settings, 'QUERY_CACHE_TIMEOUT', defaults.TIMEOUT)
 logger.debug('TIMEOUT: %s' % TIMEOUT)
 
 #use shorter keys for performance. They just have to be unique, probably no one will ever see them.
-CACHE_PREFIX = settings.QUERY_CACHE_PREFIX if hasattr(settings, 'QUERY_CACHE_PREFIX') else defaults.CACHE_PREFIX
+CACHE_PREFIX = getattr(settings, 'QUERY_CACHE_PREFIX', defaults.CACHE_PREFIX)
 logger.debug('CACHE_PREFIX: %s' % CACHE_PREFIX)
 
 #TODO: double check to make sure "ORDER BY" is included
@@ -101,11 +105,17 @@ def try_cache(self, result_type=MULTI):
 	#logger.debug('try_cache()')
 	#logger.debug(self)
 	#logger.debug('Result type: %s' % result_type)
-	logger.debug(self.as_sql())
+	
+	#as_sql() can throw this error in Django 1.3. Not sure if cache invalidation needs to take place, but I'm guessing this error means Django knows the query can't return any data.
+	try:
+		sql = self.as_sql()
+	except EmptyResultSet:
+		sql = ('', [])
+	logger.debug(sql)
 	#pdb.set_trace()
 	
 	#luckily SELECT, INSERT, UPDATE, DELETE are all 6 chars long
-	query_type = QUERY_TYPES[self.as_sql()[0][:6]]
+	query_type = QUERY_TYPES[sql[0][:6]]
 	
 	logger.debug('Query type: %s' % query_type)
 	
@@ -211,6 +221,7 @@ def try_cache(self, result_type=MULTI):
 			now = get_current_timestamp()
 			#update key lists
 			#TODO: only do this for tables not in EXCLUDE_TABLES and EXCLUDE_MODELS
+			#FIXME: only update if existing timestamp is older than new one (help avoid race conditions)
 			table_key_map = dict((key, now) for key in get_table_keys(self.query))
 			logger.debug(table_key_map)
 			cache.set_many(table_key_map, timeout=TIMEOUT)
