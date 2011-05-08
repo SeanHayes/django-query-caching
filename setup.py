@@ -4,6 +4,8 @@
 from setuptools import setup
 #import django_query_caching
 
+package_name = 'django_query_caching'
+
 setup(name='django-query-caching',
 	version='0.1.2',
 	description="Caches the results of SQL queries transparently.",
@@ -27,5 +29,6 @@ setup(name='django-query-caching',
 	license='BSD',
 	packages=['django_query_caching'],
 	install_requires=['Django',],
+	test_suite = '%s_test_project.runtests.runtests' % package_name,
 )
 
