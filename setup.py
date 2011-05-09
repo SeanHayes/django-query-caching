@@ -25,9 +25,15 @@ setup(name='django-query-caching',
 		"Topic :: Software Development :: Libraries :: Python Modules"
 	],
 	keywords='django query cache',
-	url='https://github.com/SeanHayes/django-query-caching',
+	url='http://seanhayes.name/',
+	download_url='https://github.com/SeanHayes/django-query-caching',
 	license='BSD',
-	packages=['django_query_caching'],
+	packages=[
+		'django_query_caching',
+		'django_query_caching.test',
+		'django_query_caching_test_project',
+	],
+	include_package_data=True,
 	install_requires=['Django',],
 	test_suite = '%s_test_project.runtests.runtests' % package_name,
 )
