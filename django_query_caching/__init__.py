@@ -16,7 +16,7 @@ import re
 
 logger = logging.getLogger(__name__)
 
-VERSION = (0, 1, 2)
+VERSION = (0, 2, 0, 'dev')
 
 __version__ = "".join([".".join(map(str, VERSION[0:3])), "".join(VERSION[3:])])
 
@@ -70,7 +70,7 @@ def get_query_key(compiler):
 	#NOTE: keys must be 250 characters or fewer
 	sql, params = compiler.as_nested_sql()
 	#profiling shows that using string.replace and regex to shorten sql (removing [ `.]) adds more
-	#time than is saved during sha256-ing. [6:] has some slight benefit though.
+	#time than is saved by hashing the full string via sha256. [6:] has some slight benefit though.
 	key = '%s:%s' % (compiler.using, sql[6:])
 	#logger.debug(key)
 	#logger.debug(params)
@@ -82,7 +82,7 @@ def get_query_key(compiler):
 def get_table_keys(query):
 	"Returns a set of cache keys based on table names. These keys are used to store timestamps of when the last time said tables were last updated."
 	logger.debug('get_table_keys()')
-	table_keys = set([])
+	table_keys = set()
 	tables = query.tables
 	#OPTIMIZE: if not tables:
 	if len(tables) == 0:
@@ -101,7 +101,7 @@ def get_current_timestamp():
 
 #FIXME: before doing INSERT, UPDATE, or DELETE, Django first does a SELECT to see if the rows exists, which means the cache will needlessly be updated right before the updated parts are invalidated. Any way around this? Maybe these SELECT queries have some sort of flag we can use to ignore them.
 def try_cache(self, result_type=MULTI):
-	"This function overwrites the default behavior of SQLCompiler.execute_sql(), attempting to retreive data from the cache first before trying the database."
+	"This function patches the default behavior of SQLCompiler.execute_sql(), attempting to retrieve data from the cache first before trying the database."
 	#logger.debug('try_cache()')
 	#logger.debug(self)
 	#logger.debug('Result type: %s' % result_type)
@@ -198,7 +198,6 @@ def try_cache(self, result_type=MULTI):
 			#if the query result was obtained from the cache, then it's actually a tuple of the form (timestamp, query_result)
 			ret = ret[1]
 		
-		return ret
 	#INSERT, UPDATE, DELETE statements (and SELECT with caching disabled)
 	else:
 		#perform operation
@@ -222,12 +221,12 @@ def try_cache(self, result_type=MULTI):
 			#update key lists
 			#TODO: only do this for tables not in EXCLUDE_TABLES and EXCLUDE_MODELS
 			#FIXME: only update if existing timestamp is older than new one (help avoid race conditions)
-			table_key_map = dict((key, now) for key in get_table_keys(self.query))
+			table_key_map = dict((key, now,) for key in get_table_keys(self.query))
 			logger.debug(table_key_map)
 			cache.set_many(table_key_map, timeout=TIMEOUT)
 			#pdb.set_trace()
-		
-		return ret
+	logger.debug('------------------------------------------------------------')
+	return ret
 
 if not patched:
 	logger.debug('Patching')

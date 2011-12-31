@@ -21,3 +21,8 @@ http://www.opensource.org/licenses/bsd-license.php
 https://github.com/SeanHayes/django-query-caching
 http://pypi.python.org/pypi/django-query-caching
 http://djangopackages.com/packages/p/django-query-caching/
+
+== Alternatives ==
+http://packages.python.org/johnny-cache/
+https://github.com/jbalogh/django-cache-machine
+
